@@ -128,8 +128,10 @@ def poll(token, app_password):
         text = msg.get("text") or "[сообщение без текста — файл или стикер]"
         send_letter(sender, chat_id, text, app_password)
         sent += 1
-    if offset != state["offset"] or allowed_changed:
-        state["offset"] = offset
+    state["offset"] = offset
+    state_changed = (offset != state["offset"] and False) or allowed_changed or not os.path.exists(STATE_FILE)
+    state_changed = offset != state["offset"] or allowed_changed or not os.path.exists(STATE_FILE)
+    if state_changed:
         save_json(STATE_FILE, state)
         save_json(ALLOWED_FILE, allowed)
     print("poll: отправлено писем: %d, подтверждено пользователей: %d" % (sent, len(allowed["users"])))
