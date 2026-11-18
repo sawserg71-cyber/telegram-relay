@@ -78,7 +78,7 @@ def send_letter(sender, chat_id, text, app_password):
     username = sender.get("username") or ""
     msg["From"] = MAIL_FROM
     msg["To"] = MAIL_TO
-    msg["Subject"] = "[TG %s] %s %s" % (chat_id, who, ("@" + username) if username else "").strip()
+    msg["Subject"] = ("[TG %s] %s %s" % (chat_id, who, ("@" + username) if username else "")).strip()
     msg["X-Relay-Notice"] = "1"
     msg.set_content(
         "Новое сообщение от клиента в Telegram.\n\n"
