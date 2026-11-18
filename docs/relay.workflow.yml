@@ -1,0 +1,44 @@
+# ЗАГОТОВКА. Скопируйте содержимое в .github/workflows/relay.yml
+# (веб-интерфейс: Add file -> Create new file -> путь .github/workflows/relay.yml).
+# Токены НЕ вписывайте сюда — они берутся из секретов репозитория.
+
+name: Telegram relay
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: telegram-relay
+  cancel-in-progress: false
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Poll Telegram -> mail
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          MAIL_APP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
+        run: python relay.py poll
+      - name: Mail replies -> Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          MAIL_APP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
+        run: python relay.py answers
+      - name: Commit state
+        run: |
+          git config user.name "relay-bot"
+          git config user.email "actions@github.com"
+          git add state.json allowed.json || true
+          git commit -m "state: обновление offset/whitelist" || echo "Нет изменений состояния"
+          git pull --rebase || true
+          git push
