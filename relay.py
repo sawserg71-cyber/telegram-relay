@@ -9,9 +9,9 @@ Telegram-relay: клиенты <-> ваш Telegram-бот -> ваша почта
 (нативная кнопка Telegram с request_contact). Подтвердившийся попадает в allowed.json.
 
 Как релей отличает свои письма от ответов: письма релея несут служебный заголовок
-X-Relay-Notice: 1. Обратный ход ищет письма FROM=вам с "[TG" в теме за последние
-7 дней и защищён от повторной отправки списком Message-ID в state.json —
-не зависит от статуса прочтения и звёздочек.
+X-Relay-Notice: 1. Обратный ход ищет письма FROM=вам с "[TG" в теме (тема
+декодируется из MIME) за последние 7 дней; повторная отправка исключается
+списком Message-ID в state.json — не зависит от прочтения и звёздочек.
 """
 import json
 import os
@@ -23,6 +23,7 @@ import imaplib
 import email as email_lib
 import datetime
 from email.message import EmailMessage
+from email.header import decode_header, make_header
 
 import requests
 
@@ -59,6 +60,15 @@ def load_json(path, default):
 def save_json(path, data):
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(data, fh, ensure_ascii=False, indent=1)
+
+
+def header_str(msg, field):
+    """Декодирует заголовок из MIME-слов (=?utf-8?B?...?=) в обычный текст."""
+    raw = msg.get(field, "")
+    try:
+        return str(make_header(decode_header(raw)))
+    except Exception:
+        return raw
 
 
 def parse_reply_subject(subject):
@@ -170,29 +180,19 @@ def answers(token, app_password):
     since = (datetime.datetime.utcnow() - datetime.timedelta(days=7)).strftime("%d-%b-%Y")
     # Отклик ищем среди писем от нас же с "[TG" в теме за последние 7 дней.
     # Повторная отправка исключается списком Message-ID, а не флагами письма.
-    crit = '(FROM "%s" SUBJECT "[TG" SINCE %s)' % (MAIL_FROM, since)
+    crit = '(FROM "%s" SINCE %s)' % (MAIL_FROM, since)
     typ, data = imap.search(None, crit)
-    print("answers: критерий: %s" % crit)
-    print("answers: статус поиска: %s, найдено: %s" % (typ, data[0].decode(errors="replace") if data and data[0] else "пусто"))
     ids = (data[0] or b"").split()
-    if not ids:
-        # Диагностика: что вообще видно от нас за 7 дней без фильтра по теме
-        typ2, data2 = imap.search(None, '(FROM "%s" SINCE %s)' % (MAIL_FROM, since))
-        ids2 = (data2[0] or b"").split()
-        print("answers: без фильтра темы найдено: %d" % len(ids2))
-        for mid2 in ids2[:10]:
-            _, d2 = imap.fetch(mid2, "(BODY[HEADER.FIELDS (SUBJECT MESSAGE-ID)])")
-            print("answers:   %s" % d2[0][1].decode(errors="replace").replace("\r\n", " | ").strip())
+    print("answers: найдено писем от нас за 7 дней: %d" % len(ids))
     sent = 0
     for mid in ids:
         typ, data = imap.fetch(mid, "(RFC822)")
         raw = data[0][1]
         msg, body = fetch_body(raw)
-        subj = msg.get("Subject", "")
+        subj = header_str(msg, "Subject")
         msgid = (msg.get("Message-ID") or "").strip()
         if msg.get("X-Relay-Notice") == "1":
-            print("answers: пропущено (письмо релея): %r" % subj[:60])
-            continue
+            continue  # собственное письмо релея, не ответ
         chat_id = parse_reply_subject(subj)
         if chat_id is None:
             print("answers: пропущено (нет [TG id]): %r" % subj[:60])
