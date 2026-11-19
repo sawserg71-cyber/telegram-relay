@@ -1,8 +1,14 @@
 {
- "offset": 908194240,
+ "offset": 908194244,
  "processed": [
+  "<225541795046297@mail.360.yandex.ru>",
   "<207221795046692@mail.360.yandex.ru>",
-  "<5a2ed7a9-4a78-43ce-94e5-afcade3d2c9e@yandex.ru>",
-  "<225541795046297@mail.360.yandex.ru>"
+  "<5a2ed7a9-4a78-43ce-94e5-afcade3d2c9e@yandex.ru>"
+ ],
+ "tg_done": [
+  908194240,
+  908194241,
+  908194242,
+  908194243
  ]
 }
