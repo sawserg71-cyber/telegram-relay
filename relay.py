@@ -7,6 +7,11 @@ Telegram-relay: клиенты <-> ваш Telegram-бот -> ваша почта
 
 Верификация клиентов: новый пользователь получает кнопку «Подтвердить телефон»
 (нативная кнопка Telegram с request_contact). Подтвердившийся попадает в allowed.json.
+
+Как distinguishes свои письма от ответов: письма релея несут служебный заголовок
+X-Relay-Notice: 1. Обратный ход ищет письма FROM=вам, SUBJECT содержит "[TG",
+БЕЗ флага \Flagged (звёздочки). Отправив ответ клиенту, релей ставит письму
+звёздочку — это метка "обработано". Читать письма в почте можно свободно.
 """
 import json
 import os
@@ -159,7 +164,9 @@ def answers(token, app_password):
     imap = imaplib.IMAP4_SSL(IMAP_HOST)
     imap.login(MAIL_FROM, app_password)
     imap.select("INBOX")
-    typ, data = imap.search(None, "(UNSEEN FROM \"%s\")" % MAIL_FROM)
+    # Отклик ищем среди писем от нас же с меткой [TG в теме и БЕЗ звёздочки.
+    # Звёздочка (\Flagged) после успешной отправки = "обработано релеем".
+    typ, data = imap.search(None, '(FROM "%s" UNFLAGGED SUBJECT "[TG")' % MAIL_FROM)
     ids = (data[0] or b"").split()
     sent = 0
     for mid in ids:
@@ -173,7 +180,7 @@ def answers(token, app_password):
             continue
         body = body[:4000]
         tg(token, "sendMessage", {"chat_id": chat_id, "text": body})
-        imap.store(mid, "+FLAGS", "\\Seen")
+        imap.store(mid, "+FLAGS", "\\Flagged")
         sent += 1
     imap.logout()
     print("answers: отправлено ответов: %d" % sent)
