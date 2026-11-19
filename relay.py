@@ -79,14 +79,21 @@ def parse_reply_subject(subject):
 
 
 def strip_quotes(text):
-    """Убирает строки цитирования и служебный футер релея, оставляя только ответ человека."""
-    lines = []
-    for line in (text or "").splitlines():
-        s = line.strip()
-        if s.startswith(">") or s == "— Это письмо сформировано релеем.":
-            continue
-        lines.append(line)
-    return "\n".join(lines).strip()
+    """Оставляет только ответ человека: убирает цитирование (>), служебный футер
+    релея и мобильную подпись почтового приложения.
+
+    '--' или '—' на отдельной строке — стандартный разделитель подписи:
+    всё после него считается подписью и отбрасывается целиком."""
+    lines = (text or "").splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() in ("--", "—"):
+            lines = lines[:i]
+            break
+    out = [ln for ln in lines
+           if not ln.strip().startswith(">") and ln.strip() != "— Это письмо сформировано релеем."]
+    body = "\n".join(out)
+    body = re.sub(r"^\s*Отправлено из .*$", "", body, flags=re.MULTILINE)
+    return body.strip()
 
 
 def send_letter(sender, chat_id, text, app_password):
