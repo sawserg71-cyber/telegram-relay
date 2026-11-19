@@ -9,9 +9,9 @@ Telegram-relay: клиенты <-> ваш Telegram-бот -> ваша почта
 (нативная кнопка Telegram с request_contact). Подтвердившийся попадает в allowed.json.
 
 Как релей отличает свои письма от ответов: письма релея несут служебный заголовок
-X-Relay-Notice: 1. Обратный ход ищет письма FROM=вам, SUBJECT содержит "[TG",
-БЕЗ флага \Flagged (звёздочки). Отправив ответ клиенту, релей ставит письму
-звёздочку — это метка «обработано». Читать письма в почте можно свободно.
+X-Relay-Notice: 1. Обратный ход ищет письма FROM=вам с "[TG" в теме за последние
+7 дней и защищён от повторной отправки списком Message-ID в state.json —
+не зависит от статуса прочтения и звёздочек.
 """
 import json
 import os
@@ -21,6 +21,7 @@ import ssl
 import sys
 import imaplib
 import email as email_lib
+import datetime
 from email.message import EmailMessage
 
 import requests
@@ -161,12 +162,15 @@ def fetch_body(raw):
 
 
 def answers(token, app_password):
+    state = load_json(STATE_FILE, {"offset": 0, "processed": []})
+    processed = set(state.get("processed", []))
     imap = imaplib.IMAP4_SSL(IMAP_HOST)
     imap.login(MAIL_FROM, app_password)
     imap.select("INBOX")
-    # Отклик ищем среди писем от нас же с меткой [TG в теме и БЕЗ звёздочки.
-    # Звёздочка (\Flagged) после успешной отправки = «обработано релеем».
-    typ, data = imap.search(None, '(FROM "%s" UNFLAGGED SUBJECT "[TG")' % MAIL_FROM)
+    since = (datetime.datetime.utcnow() - datetime.timedelta(days=7)).strftime("%d-%b-%Y")
+    # Отклик ищем среди писем от нас же с "[TG" в теме за последние 7 дней.
+    # Повторная отправка исключается списком Message-ID, а не флагами письма.
+    typ, data = imap.search(None, '(FROM "%s" SUBJECT "[TG" SINCE %s)' % (MAIL_FROM, since))
     ids = (data[0] or b"").split()
     sent = 0
     for mid in ids:
@@ -178,11 +182,17 @@ def answers(token, app_password):
         chat_id = parse_reply_subject(msg.get("Subject", ""))
         if chat_id is None or not body:
             continue
-        body = body[:4000]
-        tg(token, "sendMessage", {"chat_id": chat_id, "text": body})
-        imap.store(mid, "+FLAGS", "\\Flagged")
+        msgid = (msg.get("Message-ID") or "").strip()
+        if msgid and msgid in processed:
+            continue  # уже отправляли
+        tg(token, "sendMessage", {"chat_id": chat_id, "text": body[:4000]})
+        if msgid:
+            processed.add(msgid)
         sent += 1
     imap.logout()
+    if processed:
+        state["processed"] = list(processed)[-500:]
+        save_json(STATE_FILE, state)
     print("answers: отправлено ответов: %d" % sent)
 
 
