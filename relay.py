@@ -170,25 +170,44 @@ def answers(token, app_password):
     since = (datetime.datetime.utcnow() - datetime.timedelta(days=7)).strftime("%d-%b-%Y")
     # Отклик ищем среди писем от нас же с "[TG" в теме за последние 7 дней.
     # Повторная отправка исключается списком Message-ID, а не флагами письма.
-    typ, data = imap.search(None, '(FROM "%s" SUBJECT "[TG" SINCE %s)' % (MAIL_FROM, since))
+    crit = '(FROM "%s" SUBJECT "[TG" SINCE %s)' % (MAIL_FROM, since)
+    typ, data = imap.search(None, crit)
+    print("answers: критерий: %s" % crit)
+    print("answers: статус поиска: %s, найдено: %s" % (typ, data[0].decode(errors="replace") if data and data[0] else "пусто"))
     ids = (data[0] or b"").split()
+    if not ids:
+        # Диагностика: что вообще видно от нас за 7 дней без фильтра по теме
+        typ2, data2 = imap.search(None, '(FROM "%s" SINCE %s)' % (MAIL_FROM, since))
+        ids2 = (data2[0] or b"").split()
+        print("answers: без фильтра темы найдено: %d" % len(ids2))
+        for mid2 in ids2[:10]:
+            _, d2 = imap.fetch(mid2, "(BODY[HEADER.FIELDS (SUBJECT MESSAGE-ID)])")
+            print("answers:   %s" % d2[0][1].decode(errors="replace").replace("\r\n", " | ").strip())
     sent = 0
     for mid in ids:
         typ, data = imap.fetch(mid, "(RFC822)")
         raw = data[0][1]
         msg, body = fetch_body(raw)
-        if msg.get("X-Relay-Notice") == "1":
-            continue  # собственное письмо релея, не ответ
-        chat_id = parse_reply_subject(msg.get("Subject", ""))
-        if chat_id is None or not body:
-            continue
+        subj = msg.get("Subject", "")
         msgid = (msg.get("Message-ID") or "").strip()
+        if msg.get("X-Relay-Notice") == "1":
+            print("answers: пропущено (письмо релея): %r" % subj[:60])
+            continue
+        chat_id = parse_reply_subject(subj)
+        if chat_id is None:
+            print("answers: пропущено (нет [TG id]): %r" % subj[:60])
+            continue
+        if not body:
+            print("answers: пропущено (пустое тело): %r" % subj[:60])
+            continue
         if msgid and msgid in processed:
-            continue  # уже отправляли
+            print("answers: пропущено (уже обработано): %r" % subj[:60])
+            continue
         tg(token, "sendMessage", {"chat_id": chat_id, "text": body[:4000]})
         if msgid:
             processed.add(msgid)
         sent += 1
+        print("answers: отправлено в чат %s: %r" % (chat_id, body[:40]))
     imap.logout()
     if processed:
         state["processed"] = list(processed)[-500:]
