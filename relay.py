@@ -8,10 +8,11 @@ Telegram-relay: клиенты <-> ваш Telegram-бот -> ваша почта
 Верификация клиентов: новый пользователь получает кнопку «Подтвердить телефон»
 (нативная кнопка Telegram с request_contact). Подтвердившийся попадает в allowed.json.
 
-Как релей отличает свои письма от ответов: письма релея несут служебный заголовок
-X-Relay-Notice: 1. Обратный ход ищет письма FROM=вам с "[TG" в теме (тема
-декодируется из MIME) за последние 7 дней; повторная отправка исключается
-списком Message-ID в state.json — не зависит от прочтения и звёздочек.
+Защита от повторов:
+- poll держит список обработанных update_id в state.json — даже если Telegram
+  повторно отдаёт старые апдейты (наблюдалось 19.11), они не уйдут в почту дважды;
+- answers держит список обработанных Message-ID писем; письма релея отличает
+  служебный заголовок X-Relay-Notice: 1. Тема декодируется из MIME-слов.
 """
 import json
 import os
@@ -110,46 +111,61 @@ def send_letter(sender, chat_id, text, app_password):
 
 
 def poll(token, app_password):
-    state = load_json(STATE_FILE, {"offset": 0})
+    state = load_json(STATE_FILE, {"offset": 0, "tg_done": []})
     allowed = load_json(ALLOWED_FILE, {"users": {}})
+    done = set(state.get("tg_done", []))
     allowed_chats = set(filter(None, os.environ.get("TELEGRAM_ALLOWED_CHATS", "").split(",")))
     updates = tg(token, "getUpdates", {"offset": state["offset"], "timeout": 0})
     offset = state["offset"]
     allowed_changed = False
+    state_changed = False
     sent = 0
+    skipped = 0
     for upd in updates:
-        offset = max(offset, upd.get("update_id", 0) + 1)
+        uid = upd.get("update_id")
+        offset = max(offset, (uid or 0) + 1)
+        if uid is not None and uid in done:
+            skipped += 1
+            continue  # уже обрабатывали этот апдейт
         msg = upd.get("message")
         if not msg:
+            state_changed = True
             continue
         chat = msg.get("chat", {})
         chat_id = chat.get("id")
         sender = msg.get("from") or {}
         if chat.get("type") != "private":
             if str(chat_id) not in allowed_chats:
+                state_changed = True
                 continue
         else:
-            uid = str(sender.get("id", ""))
-            if uid not in allowed["users"]:
+            uid_sender = str(sender.get("id", ""))
+            if uid_sender not in allowed["users"]:
                 contact = msg.get("contact") or {}
-                if str(contact.get("user_id")) == uid:
-                    allowed["users"][uid] = {"phone_tail": (contact.get("phone_number") or "")[-4:]}
+                if str(contact.get("user_id")) == uid_sender:
+                    allowed["users"][uid_sender] = {"phone_tail": (contact.get("phone_number") or "")[-4:]}
                     allowed_changed = True
                     tg(token, "sendMessage", {"chat_id": chat_id,
                         "text": "Телефон подтверждён. Теперь пишите — сообщение дойдёт, я отвечу."})
                     continue
                 tg(token, "sendMessage", {"chat_id": chat_id, "text": CONFIRM_TEXT,
                                           "reply_markup": CONFIRM_KEYBOARD})
+                state_changed = True
                 continue
         text = msg.get("text") or "[сообщение без текста — файл или стикер]"
         send_letter(sender, chat_id, text, app_password)
         sent += 1
+        state_changed = True
+        if uid is not None:
+            done.add(uid)
     state["offset"] = offset
-    state_changed = offset != state["offset"] or allowed_changed or not os.path.exists(STATE_FILE)
+    if done:
+        state["tg_done"] = list(done)[-500:]
+    state_changed = state_changed or allowed_changed or offset != state.get("offset") or not os.path.exists(STATE_FILE)
     if state_changed:
         save_json(STATE_FILE, state)
         save_json(ALLOWED_FILE, allowed)
-    print("poll: отправлено писем: %d, подтверждено пользователей: %d" % (sent, len(allowed["users"])))
+    print("poll: отправлено писем: %d, повторов отброшено: %d, подтверждено пользователей: %d" % (sent, skipped, len(allowed["users"])))
 
 
 def fetch_body(raw):
